@@ -1,99 +1,149 @@
 var express = require('express');
 var app = express();
-const request = require('request');
+
+var request = require('request');
 var jwt = require('jsonwebtoken');
 
-// Import .env sensitive data
+// process.env.VARIABLE to access .env variables
 require('dotenv').config()
 
-// Build cognito URL
-base_url = process.env.BASE_URL + 'login?';
-client_id = process.env.CLIENT_ID;
-response_type = 'code';
-scope='openid';
-redirect_uri=process.env.REDIRECT_URI;
-finalURL = `${base_url}client_id=${client_id}&response_type=${response_type}&scope=${scope}&redirect_uri=${redirect_uri}`
+
+// Build cognito URL while establishing global variables
+BASE_URL = process.env.BASE_URL + 'login?';
+CLIENT_ID = process.env.CLIENT_ID;
+RESPONSE_TYPE = 'code';
+SCOPE = 'openid';
+REDIRECT_URI = process.env.REDIRECT_URI;
+COGNITO_LOGIN_PORTAL_URL = `${BASE_URL}client_id=${CLIENT_ID}&response_type=${RESPONSE_TYPE}&scope=${SCOPE}&redirect_uri=${REDIRECT_URI}`
 
 // Build known JWKs
-region = "us-east-2"
-userPoolId = "us-east-2_nsZqoYwUt"
-jwks = `https://cognito-idp.${region}.amazonaws.com/${userPoolId}/.well-known/jwks.json`
-// Valid kids stored here
-valid_kids = []
+REGION = "us-east-2"
+USERPOOL_ID = "us-east-2_nsZqoYwUt"
+JWKS_PUBLIC = `https://cognito-idp.${REGION}.amazonaws.com/${USERPOOL_ID}/.well-known/jwks.json`
+let validCerts;
 
-request(jwks, {json: true}, (err, res, body) => {
-    if (err) {console.log(err)};
-    if (res.statusCode == 200) { body.keys.forEach(key => valid_kids.push(key.kid))}
-    else { console.log("res status code wasnt 200")}
+request(JWKS_PUBLIC, { json: true }, (err, res, body) => {
+    if (err) { console.log(err) };
+    if (res.statusCode === 200) { validCerts = body.keys }
+    else { console.log("res status code wasnt 200") }
 })
 
-// Verifying incoming token
+// return of a json object from fat-arrow function
+// const checkKid = (kid) => ({
+
+// });
+
+// currying, please don't do
+// const createFunctionForKidChecking = (kidToCheck) => (kid) =>  kid === kidToCheck/
+
+// function as parameter to iterator with implicit return
+// const mapNumToString = (num) => num.toString();
+// [1,2,3].map(mapNumToString)
+
+// TODO: Verifying incoming token
 function verifyToken(token) {
-    const decodedJwt = jwt.decode(token, {complete: true});
+    const decodedJwt = jwt.decode(token, { complete: true });
     let payload = decodedJwt.payload;
+
+    const kidToCheck = payload.kid;
+
+    const correctCert = validCerts.find(cert => cert.kid === kidToCheck);
+    
+    if(!correctCert) {
+        return false
+    }
+
+    const options = {
+        algorithms: 'RS256',
+        audience: CLIENT_ID,
+        issuer: "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_nsZqoYwUt",
+        
+    }
+
+    
+    // Verify the token is actually legitimate
+    jwt.verify(token, correctCert, options);
+
+    try {
+        jwt.verify(token, correctCert, options);
+        return true;
+    }
+    catch (err) {
+        return false;
+    }
     // user pool ID should match payload[aud]
-    if (client_id != payload.aud) {
-        throw new Error("Invalid audience: " + payload.aud)
-    }
+    // if (CLIENT_ID !== payload.aud) {
+    //     throw new Error("Invalid audience: " + payload.aud)
+    // }
 
-    if (payload.iss != `https://cognito-idp.${region}.amazonaws.com/${userPoolId}`) {
-        throw new Error("Invalid issuer: " + payload.iss)
-    }
+    // if (payload.iss !== `https://cognito-idp.${REGION}.amazonaws.com/${USERPOOL_ID}`) {
+    //     throw new Error("Invalid issuer: " + payload.iss)
+    // }
 
-    if (valid_kids.indexOf(payload.kid) !== -1) {
-        return true
-    }
-    else {
-        throw new Error("Invalid payload.kid: " + payload.kid)
-    }
 }
 
-function getTokens(code) {
+const getTokens = async (code) => {
+    // As per https://docs.aws.amazon.com/cognito/latest/developerguide/token-endpoint.html
     body = {
-        client_id: process.env.CLIENT_ID,
         grant_type: "authorization_code",
-        redirect_uri: process.env.REDIRECT_URI,
-        scope: 'openid',
+        client_id: CLIENT_ID,
+        scope: SCOPE,
+        redirect_uri: REDIRECT_URI,
         code: code,
     }
+
+    // Sample request
+    // POST https://mydomain.auth.us-east-1.amazoncognito.com/oauth2/token&
+    //                    Content-Type='application/x-www-form-urlencoded'&
+    //                    Authorization=Basic aSdxd892iujendek328uedj
+                       
+    //                    grant_type=authorization_code&
+    //                    client_id=djc98u3jiedmi283eu928&
+    //                    code=AUTHORIZATION_CODE&
+    //                    redirect_uri=com.myclientapp://myclient/redirect
 
     headers = {
             'Content-Type': "application/x-www-form-urlencoded",
         }
-    url = `${base_url}/oauth2/token`
-    
+    url = `${process.env.BASE_URL}/oauth2/token`
+
     options = {
         url: url,
-        json: true,
-        headers: headers,
-        body: body,
+        // json: true,
+        // headers: headers,
+        form: body,
         method: 'POST',
     }
+
+    // https://github.com/request/request
+
+    // console.log({options, body, url})
 
     function callback(err, res, body) {
         if (!err && res.statusCode == 200) {
             console.log(body);
             return body
         }
+        const {statusCode, headers} = res;
 
-        console.log("res: " + body)
-        console.log("res: " + res.statusCode)
-        console.log("res: " + err)
+        console.log({body})
+        console.log({statusCode})
+        console.log({headers})
+        console.log({err})
 
         throw new Error("Could not get token for some reason..");
     }
 
     // POST oauth2/token endpoint
-    request(options, callback);
+    try {
+        const res = await request(options, callback);
+    } catch {
+
+    }
 }
 
-// response = requests.post(f'{SITE_URL}/oauth2/token', data=data, headers=headers)
-// response.raise_for_status()
-// credentials = response.json()
-
-
 // Serving "/" -> redirect to Cognito hosted UI
-app.get('/', (req, res) => res.redirect(finalURL));
+app.get('/', (req, res) => res.redirect(COGNITO_LOGIN_PORTAL_URL));
 
 // Login from "/" => Callback Redirect URI 
 app.get('/portal/cognito/redirect', function(req, res) {
@@ -108,6 +158,7 @@ app.get('/portal/cognito/redirect', function(req, res) {
     console.log(tokens);
 
     // TODO: Authenticate Token
+    verifyToken(tokens.id_token);
     res.send("Hello. Please handle redirect using the code above");
 });
 
